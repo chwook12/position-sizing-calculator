@@ -97,6 +97,23 @@ function formatCurrencyAmount(value, currency) {
   return `${prefix}${formatNumber(value, decimals)}`;
 }
 
+function formatKrwAmount(value) {
+  if (!Number.isFinite(value)) return "-";
+  return `₩${formatNumber(value, 0)}`;
+}
+
+function formatPositionSize(value) {
+  const baseText = formatMoney(value);
+  const currency = activeCurrency();
+  const krwPerUnit = state.fx?.krwPerUnit;
+  if (currency === "KRW" || !Number.isFinite(krwPerUnit)) {
+    return baseText;
+  }
+
+  const krwValue = value * krwPerUnit;
+  return `${baseText}<span class="krw-converted">(${formatKrwAmount(krwValue)})</span>`;
+}
+
 function activeCurrency() {
   return state.lastQuote?.currency || state.selected?.currency || selectedMarketCurrency() || "KRW";
 }
@@ -175,7 +192,7 @@ function calculate() {
 
   outputs.slPercent.textContent = `${formatNumber(slPercent, 2)}%`;
   outputs.qty.textContent = formatNumber(qty, 0);
-  outputs.positionSize.textContent = formatMoney(positionSize);
+  outputs.positionSize.innerHTML = formatPositionSize(positionSize);
   outputs.riskAmount.textContent = formatMoney(riskAmount);
   calculationNoteEl.hidden = true;
   calculationNoteEl.textContent = "";
@@ -578,7 +595,6 @@ shortBtn.addEventListener("click", () => setDirection("short"));
 );
 
 queryEl.value = "삼성전자";
-rptEl.value = addThousandsSeparators(rptEl.value);
 updateDateModeLabels();
 updateVenueControls();
 updateVenueVisibility();

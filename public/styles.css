@@ -310,6 +310,16 @@ select {
   line-height: 1.05;
 }
 
+.result-panel .krw-converted {
+  display: block;
+  margin-top: 0.42rem;
+  margin-bottom: 0;
+  color: var(--muted);
+  font-size: 0.58em;
+  font-weight: 800;
+  line-height: 1.1;
+}
+
 .calculation-note {
   margin: 0.65rem 0 0;
   color: var(--red);
