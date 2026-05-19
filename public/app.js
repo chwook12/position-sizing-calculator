@@ -320,10 +320,14 @@ function selectStock(item) {
 
 function updateLoadedStatus() {
   if (!state.lastQuote) return;
-  const entryVenue = quoteForVenue(entryVenueEl.value)?.venue || entryVenueEl.value;
-  const stopVenue = quoteForVenue(stopVenueEl.value)?.venue || stopVenueEl.value;
+  const entryQuote = quoteForVenue(entryVenueEl.value);
+  const stopQuote = quoteForVenue(stopVenueEl.value);
+  const entryVenue = entryQuote?.venue || entryVenueEl.value;
+  const stopVenue = stopQuote?.venue || stopVenueEl.value;
+  const source = entryQuote?.source || state.lastQuote.source;
+  const delay = entryQuote?.delay ? ` · ${entryQuote.delay}` : "";
   setStatus(
-    `${state.lastQuote.name || state.lastQuote.symbol} · ${state.lastQuote.symbol} · ${state.lastQuote.currency} · 진입 ${entryVenue} / 손절 ${stopVenue}`
+    `${state.lastQuote.name || state.lastQuote.symbol} · ${state.lastQuote.symbol} · ${state.lastQuote.currency} · 진입 ${entryVenue} / 손절 ${stopVenue} · ${source}${delay}`
   );
 }
 
@@ -347,11 +351,25 @@ function updateVenueControls() {
 
   if (!state.lastQuote?.venues?.[entryVenueEl.value]) entryVenueEl.value = "KRX";
   if (!state.lastQuote?.venues?.[stopVenueEl.value]) stopVenueEl.value = "KRX";
+  updateVenueLabels();
 }
 
 function updateVenueVisibility() {
   const shouldShow = activeCurrency() === "KRW" && Boolean(state.lastQuote?.venues);
   venueGridEl.hidden = !shouldShow;
+}
+
+function updateVenueLabels() {
+  const nxtQuote = state.lastQuote?.venues?.NXT;
+  const label = nxtQuote?.realtime
+    ? "NXT (실시간)"
+    : nxtQuote?.delay
+      ? `NXT (${nxtQuote.delay})`
+      : "NXT";
+
+  [...entryVenueEl.options, ...stopVenueEl.options].forEach((option) => {
+    if (option.value === "NXT") option.textContent = label;
+  });
 }
 
 function updateEntryFromSelectedVenue() {
