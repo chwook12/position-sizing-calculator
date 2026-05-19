@@ -14,18 +14,28 @@
       </header>
 
       <section class="panel form-panel" aria-label="포지션 입력">
-        <label class="field">
-          <span>국가/통화</span>
-          <select id="market">
-            <option value="AUTO">🌐 자동 감지</option>
-            <option value="KR" selected>🇰🇷 KR (KRW)</option>
-            <option value="US">🇺🇸 US (USD)</option>
-            <option value="JP">🇯🇵 JP (JPY)</option>
-            <option value="HK">🇭🇰 HK (HKD)</option>
-            <option value="CN">🇨🇳 CN (CNY)</option>
-            <option value="VN">🇻🇳 VN (VND)</option>
-          </select>
-        </label>
+        <div class="settings-grid">
+          <label class="field">
+            <span>국가/통화</span>
+            <select id="market">
+              <option value="AUTO">🌐 자동 감지</option>
+              <option value="KR" selected>🇰🇷 KR (KRW)</option>
+              <option value="US">🇺🇸 US (USD)</option>
+              <option value="JP">🇯🇵 JP (JPY)</option>
+              <option value="HK">🇭🇰 HK (HKD)</option>
+              <option value="CN">🇨🇳 CN (CNY)</option>
+              <option value="VN">🇻🇳 VN (VND)</option>
+            </select>
+          </label>
+
+          <label class="field">
+            <span>봉 기준</span>
+            <select id="candleMode">
+              <option value="D" selected>일봉</option>
+              <option value="W">주봉</option>
+            </select>
+          </label>
+        </div>
 
         <div class="symbol-row">
           <label class="field symbol-field">
@@ -41,6 +51,23 @@
         </div>
         <div id="suggestions" class="suggestions" hidden></div>
         <p id="selectedStock" class="selected-stock">종목을 검색해 주세요.</p>
+
+        <div class="date-grid">
+          <label class="field">
+            <span>진입가 기준</span>
+            <select id="entryDateMode">
+              <option value="TODAY" selected>최신 거래일</option>
+              <option value="PREV">직전 거래일</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>손절가 기준</span>
+            <select id="stopDateMode">
+              <option value="TODAY" selected>최신 거래일</option>
+              <option value="PREV">직전 거래일</option>
+            </select>
+          </label>
+        </div>
 
         <div class="venue-grid">
           <label class="field">
@@ -91,7 +118,7 @@
           <span>손절가 (STOP)</span>
           <div class="money-input">
             <span id="stopSymbol" class="currency-prefix">₩</span>
-            <input id="stop" inputmode="decimal" placeholder="롱은 당일 저가, 숏은 당일 고가" />
+            <input id="stop" inputmode="decimal" placeholder="롱은 기준일 저가, 숏은 기준일 고가" />
           </div>
         </label>
       </section>
@@ -114,10 +141,11 @@
           <strong id="riskAmount" class="warn">-</strong>
         </article>
       </section>
+      <p id="calculationNote" class="calculation-note" hidden></p>
 
       <footer>
         <p>수량 = floor(RPT ÷ |진입가 - 손절가|) · 포지션 = 수량 × 진입가</p>
-        <p>KR 종목은 KRX/NXT 기준을 선택할 수 있고, 해외 종목은 Yahoo Finance 차트 데이터를 사용합니다.</p>
+        <p>최신/직전은 선택한 시장의 현지 거래일 또는 거래주 기준으로 계산합니다.</p>
       </footer>
     </main>
 

@@ -1,4 +1,7 @@
 const marketEl = document.querySelector("#market");
+const candleModeEl = document.querySelector("#candleMode");
+const entryDateModeEl = document.querySelector("#entryDateMode");
+const stopDateModeEl = document.querySelector("#stopDateMode");
 const queryEl = document.querySelector("#query");
 const suggestionsEl = document.querySelector("#suggestions");
 const selectedStockEl = document.querySelector("#selectedStock");
@@ -22,11 +25,13 @@ const outputs = {
   positionSize: document.querySelector("#positionSize"),
   riskAmount: document.querySelector("#riskAmount"),
 };
+const calculationNoteEl = document.querySelector("#calculationNote");
 
 const state = {
   direction: "long",
   selected: null,
   lastQuote: null,
+  quotesByDate: {},
   fx: {
     from: "KRW",
     to: "KRW",
@@ -121,17 +126,45 @@ function formatInputNumber(value) {
   return addThousandsSeparators(Number(value).toFixed(4).replace(/\.?0+$/, ""));
 }
 
+function setEmptyResults() {
+  outputs.slPercent.textContent = "-";
+  outputs.qty.textContent = "-";
+  outputs.positionSize.textContent = "-";
+  outputs.riskAmount.textContent = "-";
+  calculationNoteEl.hidden = true;
+  calculationNoteEl.textContent = "";
+}
+
+function setUnavailableResults(message) {
+  outputs.slPercent.textContent = "계산 불가";
+  outputs.qty.textContent = "계산 불가";
+  outputs.positionSize.textContent = "계산 불가";
+  outputs.riskAmount.textContent = "계산 불가";
+  calculationNoteEl.hidden = false;
+  calculationNoteEl.textContent = message;
+}
+
 function calculate() {
   const rpt = state.fx?.convertedAmount || parseNumber(rptEl.value);
   const entry = parseNumber(entryEl.value);
   const stop = parseNumber(stopEl.value);
-  const riskPerShare = Math.abs(entry - stop);
 
-  if (rpt <= 0 || entry <= 0 || stop <= 0 || riskPerShare <= 0) {
-    outputs.slPercent.textContent = "-";
-    outputs.qty.textContent = "-";
-    outputs.positionSize.textContent = "-";
-    outputs.riskAmount.textContent = "-";
+  if (rpt <= 0 || entry <= 0 || stop <= 0) {
+    setEmptyResults();
+    return;
+  }
+
+  const riskPerShare =
+    state.direction === "long"
+      ? entry - stop
+      : stop - entry;
+
+  if (riskPerShare <= 0) {
+    const message =
+      state.direction === "long"
+        ? "계산 불가: 롱은 손절가가 진입가보다 낮아야 합니다."
+        : "계산 불가: 숏은 손절가가 진입가보다 높아야 합니다.";
+    setUnavailableResults(message);
     return;
   }
 
@@ -144,6 +177,8 @@ function calculate() {
   outputs.qty.textContent = formatNumber(qty, 0);
   outputs.positionSize.textContent = formatMoney(positionSize);
   outputs.riskAmount.textContent = formatMoney(riskAmount);
+  calculationNoteEl.hidden = true;
+  calculationNoteEl.textContent = "";
 }
 
 function updateRptPrefix() {
@@ -157,6 +192,17 @@ function updatePricePrefixes() {
   stopSymbolEl.textContent = symbol;
   syncCurrencyPrefixSpace(entrySymbolEl);
   syncCurrencyPrefixSpace(stopSymbolEl);
+}
+
+function periodWord() {
+  return candleModeEl.value === "W" ? "거래주" : "거래일";
+}
+
+function updateDateModeLabels() {
+  const word = periodWord();
+  [...entryDateModeEl.options, ...stopDateModeEl.options].forEach((option) => {
+    option.textContent = option.value === "PREV" ? `직전 ${word}` : `최신 ${word}`;
+  });
 }
 
 function syncCurrencyPrefixSpace(prefixEl) {
@@ -320,47 +366,68 @@ function selectStock(item) {
 
 function updateLoadedStatus() {
   if (!state.lastQuote) return;
-  const entryQuote = quoteForVenue(entryVenueEl.value);
-  const stopQuote = quoteForVenue(stopVenueEl.value);
+  const entryQuote = quoteForSelection("entry");
+  const stopQuote = quoteForSelection("stop");
   const entryVenue = entryQuote?.venue || entryVenueEl.value;
   const stopVenue = stopQuote?.venue || stopVenueEl.value;
   const source = entryQuote?.source || state.lastQuote.source;
   const delay = entryQuote?.delay ? ` · ${entryQuote.delay}` : "";
+  const entryDate = describeQuoteDate(entryQuote, entryDateModeEl.value);
+  const stopDate = describeQuoteDate(stopQuote, stopDateModeEl.value);
   setStatus(
-    `${state.lastQuote.name || state.lastQuote.symbol} · ${state.lastQuote.symbol} · ${state.lastQuote.currency} · 진입 ${entryVenue} / 손절 ${stopVenue} · ${source}${delay}`
+    `${state.lastQuote.name || state.lastQuote.symbol} · ${state.lastQuote.symbol} · ${state.lastQuote.currency} · 진입 ${entryDate} ${entryVenue} / 손절 ${stopDate} ${stopVenue} · ${source}${delay}`
   );
 }
 
-function quoteForVenue(venue) {
-  if (!state.lastQuote) return null;
-  return state.lastQuote.venues?.[venue] || state.lastQuote;
+function describeQuoteDate(quote, mode) {
+  const label = `${mode === "PREV" ? "직전" : "최신"} ${quote?.candle === "W" ? "주" : "일"}`;
+  return quote?.tradingDate ? `${label}(${quote.tradingDate})` : label;
+}
+
+function quoteBundleForDate(dateMode) {
+  return state.quotesByDate?.[dateMode] || null;
+}
+
+function quoteForSelection(kind) {
+  const dateMode = kind === "entry" ? entryDateModeEl.value : stopDateModeEl.value;
+  const venue = kind === "entry" ? entryVenueEl.value : stopVenueEl.value;
+  const bundle = quoteBundleForDate(dateMode);
+  if (!bundle) return null;
+  return bundle.venues?.[venue] || bundle;
 }
 
 function updateVenueControls() {
-  const hasVenueData = Boolean(state.lastQuote?.venues);
   updateVenueVisibility();
-  entryVenueEl.disabled = !hasVenueData;
-  stopVenueEl.disabled = !hasVenueData;
 
-  [...entryVenueEl.options].forEach((option) => {
-    option.disabled = hasVenueData && !state.lastQuote.venues[option.value];
-  });
-  [...stopVenueEl.options].forEach((option) => {
-    option.disabled = hasVenueData && !state.lastQuote.venues[option.value];
-  });
-
-  if (!state.lastQuote?.venues?.[entryVenueEl.value]) entryVenueEl.value = "KRX";
-  if (!state.lastQuote?.venues?.[stopVenueEl.value]) stopVenueEl.value = "KRX";
+  const entryBundle = quoteBundleForDate(entryDateModeEl.value);
+  const stopBundle = quoteBundleForDate(stopDateModeEl.value);
+  updateVenueSelect(entryVenueEl, entryBundle);
+  updateVenueSelect(stopVenueEl, stopBundle);
   updateVenueLabels();
 }
 
 function updateVenueVisibility() {
-  const shouldShow = activeCurrency() === "KRW" && Boolean(state.lastQuote?.venues);
+  const selectedBundles = [quoteBundleForDate(entryDateModeEl.value), quoteBundleForDate(stopDateModeEl.value)];
+  const shouldShow =
+    activeCurrency() === "KRW" &&
+    selectedBundles.some((bundle) => Object.keys(bundle?.venues || {}).length > 1);
   venueGridEl.hidden = !shouldShow;
 }
 
+function updateVenueSelect(selectEl, bundle) {
+  const venues = bundle?.venues || {};
+  const hasVenueData = Boolean(bundle?.venues);
+  selectEl.disabled = !hasVenueData;
+
+  [...selectEl.options].forEach((option) => {
+    option.disabled = hasVenueData && !venues[option.value];
+  });
+
+  if (!venues[selectEl.value]) selectEl.value = "KRX";
+}
+
 function updateVenueLabels() {
-  const nxtQuote = state.lastQuote?.venues?.NXT;
+  const nxtQuote = state.quotesByDate?.TODAY?.venues?.NXT;
   const label = nxtQuote?.realtime
     ? "NXT (실시간)"
     : nxtQuote?.delay
@@ -373,7 +440,7 @@ function updateVenueLabels() {
 }
 
 function updateEntryFromSelectedVenue() {
-  const quote = quoteForVenue(entryVenueEl.value);
+  const quote = quoteForSelection("entry");
   if (!quote) return;
   entryEl.value = formatInputNumber(quote.price);
   updateLoadedStatus();
@@ -381,7 +448,7 @@ function updateEntryFromSelectedVenue() {
 }
 
 function updateStopFromSelectedVenue() {
-  const quote = quoteForVenue(stopVenueEl.value);
+  const quote = quoteForSelection("stop");
   if (!quote) return;
   stopEl.value =
     state.direction === "long"
@@ -391,8 +458,9 @@ function updateStopFromSelectedVenue() {
   calculate();
 }
 
-function applyLoadedQuote(data) {
-  state.lastQuote = data;
+function applyLoadedQuotes(quotesByDate) {
+  state.quotesByDate = quotesByDate;
+  state.lastQuote = quotesByDate.TODAY || quotesByDate.PREV;
   updatePricePrefixes();
   updateVenueControls();
   updateEntryFromSelectedVenue();
@@ -412,21 +480,21 @@ async function loadPrice() {
   setStatus("가격 데이터를 불러오는 중입니다...");
 
   try {
-    const params = new URLSearchParams({
+    const baseParams = {
       market: marketEl.value,
+      candle: candleModeEl.value,
       q: query,
-    });
+    };
     if (state.selected?.symbol) {
-      params.set("symbol", state.selected.symbol);
+      baseParams.symbol = state.selected.symbol;
     }
 
-    const response = await fetch(`/api/quote?${params}`);
-    const data = await response.json();
-    if (!response.ok) {
-      throw new Error(data.error || "가격을 불러오지 못했습니다.");
-    }
+    const [todayQuote, prevQuote] = await Promise.all([
+      fetchQuoteForDate(baseParams, "TODAY"),
+      fetchQuoteForDate(baseParams, "PREV"),
+    ]);
 
-    applyLoadedQuote(data);
+    applyLoadedQuotes({ TODAY: todayQuote, PREV: prevQuote });
     updateLoadedStatus();
   } catch (error) {
     setStatus(error.message, "error");
@@ -436,6 +504,19 @@ async function loadPrice() {
   }
 }
 
+async function fetchQuoteForDate(baseParams, dateMode) {
+  const params = new URLSearchParams({
+    ...baseParams,
+    dateMode,
+  });
+  const response = await fetch(`/api/quote?${params}`);
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.error || "가격을 불러오지 못했습니다.");
+  }
+  return data;
+}
+
 queryEl.addEventListener("input", debounceSearch);
 queryEl.addEventListener("keydown", (event) => {
   if (event.key === "Enter") {
@@ -443,15 +524,7 @@ queryEl.addEventListener("keydown", (event) => {
   }
 });
 marketEl.addEventListener("change", () => {
-  state.selected = null;
-  state.lastQuote = null;
-  queryEl.value = "";
-  entryEl.value = "";
-  stopEl.value = "";
-  suggestionsEl.hidden = true;
-  suggestionsEl.innerHTML = "";
-  selectedStockEl.textContent = "종목을 검색해 주세요.";
-  selectedStockEl.style.color = "var(--blue)";
+  clearLoadedInputs();
   updatePricePrefixes();
   updateVenueControls();
   updateVenueVisibility();
@@ -459,6 +532,38 @@ marketEl.addEventListener("change", () => {
   debounceFx();
   calculate();
 });
+candleModeEl.addEventListener("change", () => {
+  state.lastQuote = null;
+  state.quotesByDate = {};
+  entryEl.value = "";
+  stopEl.value = "";
+  updateDateModeLabels();
+  updateVenueControls();
+  updateVenueVisibility();
+  setStatus(`${candleModeEl.value === "W" ? "주봉" : "일봉"} 기준으로 가격을 다시 불러와 주세요.`);
+  calculate();
+});
+entryDateModeEl.addEventListener("change", () => {
+  updateVenueControls();
+  updateEntryFromSelectedVenue();
+});
+stopDateModeEl.addEventListener("change", () => {
+  updateVenueControls();
+  updateStopFromSelectedVenue();
+});
+
+function clearLoadedInputs() {
+  state.selected = null;
+  state.lastQuote = null;
+  state.quotesByDate = {};
+  queryEl.value = "";
+  entryEl.value = "";
+  stopEl.value = "";
+  suggestionsEl.hidden = true;
+  suggestionsEl.innerHTML = "";
+  selectedStockEl.textContent = "종목을 검색해 주세요.";
+  selectedStockEl.style.color = "var(--blue)";
+}
 loadPriceEl.addEventListener("click", loadPrice);
 entryVenueEl.addEventListener("change", updateEntryFromSelectedVenue);
 stopVenueEl.addEventListener("change", updateStopFromSelectedVenue);
@@ -474,6 +579,7 @@ shortBtn.addEventListener("click", () => setDirection("short"));
 
 queryEl.value = "삼성전자";
 rptEl.value = addThousandsSeparators(rptEl.value);
+updateDateModeLabels();
 updateVenueControls();
 updateVenueVisibility();
 updatePricePrefixes();

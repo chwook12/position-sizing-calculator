@@ -78,6 +78,20 @@ footer p {
   margin-bottom: 1rem;
 }
 
+.settings-grid,
+.date-grid {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.settings-grid {
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, 0.75fr);
+}
+
+.date-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .field span {
   color: var(--muted);
   font-size: 0.88rem;
@@ -296,6 +310,14 @@ select {
   line-height: 1.05;
 }
 
+.calculation-note {
+  margin: 0.65rem 0 0;
+  color: var(--red);
+  font-size: 0.9rem;
+  font-weight: 800;
+  text-align: center;
+}
+
 .danger {
   color: var(--red);
 }
@@ -328,6 +350,8 @@ footer p {
   }
 
   .venue-grid,
+  .settings-grid,
+  .date-grid,
   .direction-group,
   .result-panel {
     grid-template-columns: 1fr;
