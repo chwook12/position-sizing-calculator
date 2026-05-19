@@ -7,6 +7,9 @@ import re
 import socket
 import sys
 import time
+import asyncio
+import base64
+import hmac
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -40,6 +43,7 @@ KR_SUFFIX_BY_TYPE = {
 _search_cache: dict[tuple[str, str], tuple[float, list[dict]]] = {}
 _quote_cache: dict[str, tuple[float, dict]] = {}
 _fx_cache: dict[str, tuple[float, dict]] = {}
+_kis_approval_cache: dict[str, tuple[float, str]] = {}
 
 FX_SYMBOLS = {
     "USD": "KRW=X",
@@ -47,6 +51,64 @@ FX_SYMBOLS = {
     "HKD": "HKDKRW=X",
     "CNY": "CNYKRW=X",
 }
+
+KIS_CONFIG_FILE = ROOT / "kis_config.json"
+KIS_REST_BASE = {
+    "prod": "https://openapi.koreainvestment.com:9443",
+    "vps": "https://openapivts.koreainvestment.com:29443",
+}
+KIS_WS_BASE = {
+    "prod": "ws://ops.koreainvestment.com:21000/tryitout",
+    "vps": "ws://ops.koreainvestment.com:31000/tryitout",
+}
+KIS_NXT_CCN_COLUMNS = [
+    "MKSC_SHRN_ISCD",
+    "STCK_CNTG_HOUR",
+    "STCK_PRPR",
+    "PRDY_VRSS_SIGN",
+    "PRDY_VRSS",
+    "PRDY_CTRT",
+    "WGHN_AVRG_STCK_PRC",
+    "STCK_OPRC",
+    "STCK_HGPR",
+    "STCK_LWPR",
+    "ASKP1",
+    "BIDP1",
+    "CNTG_VOL",
+    "ACML_VOL",
+    "ACML_TR_PBMN",
+    "SELN_CNTG_CSNU",
+    "SHNU_CNTG_CSNU",
+    "NTBY_CNTG_CSNU",
+    "CTTR",
+    "SELN_CNTG_SMTN",
+    "SHNU_CNTG_SMTN",
+    "CNTG_CLS_CODE",
+    "SHNU_RATE",
+    "PRDY_VOL_VRSS_ACML_VOL_RATE",
+    "OPRC_HOUR",
+    "OPRC_VRSS_PRPR_SIGN",
+    "OPRC_VRSS_PRPR",
+    "HGPR_HOUR",
+    "HGPR_VRSS_PRPR_SIGN",
+    "HGPR_VRSS_PRPR",
+    "LWPR_HOUR",
+    "LWPR_VRSS_PRPR_SIGN",
+    "LWPR_VRSS_PRPR",
+    "BSOP_DATE",
+    "NEW_MKOP_CLS_CODE",
+    "TRHT_YN",
+    "ASKP_RSQN1",
+    "BIDP_RSQN1",
+    "TOTAL_ASKP_RSQN",
+    "TOTAL_BIDP_RSQN",
+    "VOL_TNRT",
+    "PRDY_SMNS_HOUR_ACML_VOL",
+    "PRDY_SMNS_HOUR_ACML_VOL_RATE",
+    "HOUR_CLS_CODE",
+    "MRKT_TRTM_CLS_CODE",
+    "VI_STND_PRC",
+]
 
 
 def http_json(
@@ -67,6 +129,21 @@ def http_json(
     return json.loads(payload)
 
 
+def http_json_post(url: str, payload: dict, timeout: int = 10) -> dict:
+    body = json.dumps(payload).encode("utf-8")
+    req = Request(
+        url,
+        data=body,
+        headers={
+            "User-Agent": USER_AGENT,
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/plain, */*",
+        },
+    )
+    with urlopen(req, timeout=timeout) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
 def json_response(handler: SimpleHTTPRequestHandler, status: int, data: dict | list) -> None:
     body = json.dumps(data, ensure_ascii=False).encode("utf-8")
     handler.send_response(status)
@@ -79,6 +156,41 @@ def json_response(handler: SimpleHTTPRequestHandler, status: int, data: dict | l
 
 def error_response(handler: SimpleHTTPRequestHandler, status: int, message: str) -> None:
     json_response(handler, status, {"error": message})
+
+
+def is_authorized(headers) -> bool:
+    password = os.environ.get("APP_PASSWORD", "").strip()
+    if not password:
+        return True
+
+    auth_header = headers.get("Authorization", "")
+    if not auth_header.startswith("Basic "):
+        return False
+
+    try:
+        decoded = base64.b64decode(auth_header[6:], validate=True).decode("utf-8")
+    except (ValueError, UnicodeDecodeError):
+        return False
+
+    username, separator, given_password = decoded.partition(":")
+    if not separator:
+        return False
+
+    expected_username = os.environ.get("APP_USERNAME", "").strip()
+    if expected_username and not hmac.compare_digest(username, expected_username):
+        return False
+
+    return hmac.compare_digest(given_password, password)
+
+
+def auth_required_response(handler: SimpleHTTPRequestHandler) -> None:
+    body = b"Authentication required"
+    handler.send_response(401)
+    handler.send_header("WWW-Authenticate", 'Basic realm="Position Sizing Calculator"')
+    handler.send_header("Content-Type", "text/plain; charset=utf-8")
+    handler.send_header("Content-Length", str(len(body)))
+    handler.end_headers()
+    handler.wfile.write(body)
 
 
 def market_from_nation(nation_code: str | None) -> str:
@@ -149,6 +261,137 @@ def parse_price(value) -> float | None:
         return float(text)
     except ValueError:
         return None
+
+
+def load_kis_config() -> dict | None:
+    config: dict[str, str] = {
+        "app_key": os.environ.get("KIS_APP_KEY", "").strip(),
+        "app_secret": os.environ.get("KIS_APP_SECRET", "").strip(),
+        "env": os.environ.get("KIS_ENV", "prod").strip().lower() or "prod",
+    }
+
+    if KIS_CONFIG_FILE.is_file():
+        try:
+            local_config = json.loads(KIS_CONFIG_FILE.read_text(encoding="utf-8"))
+            config["app_key"] = local_config.get("app_key") or local_config.get("appkey") or config["app_key"]
+            config["app_secret"] = (
+                local_config.get("app_secret")
+                or local_config.get("appsecret")
+                or local_config.get("secretkey")
+                or config["app_secret"]
+            )
+            config["env"] = (local_config.get("env") or config["env"]).lower()
+        except (OSError, json.JSONDecodeError):
+            return None
+
+    if not config["app_key"] or not config["app_secret"]:
+        return None
+    if config["env"] not in KIS_REST_BASE:
+        config["env"] = "prod"
+    return config
+
+
+def kis_approval_key(config: dict) -> str:
+    cache_key = f"{config['env']}:{config['app_key']}"
+    cached = _kis_approval_cache.get(cache_key)
+    if cached and time.time() - cached[0] < 60 * 60 * 20:
+        return cached[1]
+
+    data = http_json_post(
+        f"{KIS_REST_BASE[config['env']]}/oauth2/Approval",
+        {
+            "grant_type": "client_credentials",
+            "appkey": config["app_key"],
+            "secretkey": config["app_secret"],
+        },
+    )
+    approval_key = data.get("approval_key")
+    if not approval_key:
+        raise ValueError(data.get("msg1") or "한국투자 WebSocket 접속키 발급에 실패했습니다.")
+
+    _kis_approval_cache[cache_key] = (time.time(), approval_key)
+    return approval_key
+
+
+async def kis_realtime_tick(config: dict, code: str, timeout: float = 2.8) -> dict:
+    try:
+        import websockets
+    except ImportError as exc:
+        raise ValueError("websockets 패키지가 설치되어 있지 않습니다.") from exc
+
+    approval_key = kis_approval_key(config)
+    tr_id = "H0NXCNT0"
+    subscribe_message = {
+        "header": {
+            "approval_key": approval_key,
+            "custtype": "P",
+            "tr_type": "1",
+            "content-type": "utf-8",
+        },
+        "body": {"input": {"tr_id": tr_id, "tr_key": code}},
+    }
+
+    async with websockets.connect(KIS_WS_BASE[config["env"]], ping_interval=None) as ws:
+        await ws.send(json.dumps(subscribe_message))
+        end_at = asyncio.get_running_loop().time() + timeout
+
+        while True:
+            remaining = end_at - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                raise TimeoutError("한국투자 NXT 실시간 시세 수신 시간이 초과되었습니다.")
+
+            raw = await asyncio.wait_for(ws.recv(), timeout=remaining)
+            if not raw:
+                continue
+
+            if raw[0] in {"0", "1"}:
+                parts = raw.split("|")
+                if len(parts) < 4 or parts[1] != tr_id:
+                    continue
+                values = parts[3].split("^")
+                row = dict(zip(KIS_NXT_CCN_COLUMNS, values))
+                if row.get("MKSC_SHRN_ISCD") == code:
+                    return row
+                continue
+
+            message = json.loads(raw)
+            header = message.get("header", {})
+            if header.get("tr_id") == "PINGPONG":
+                await ws.pong(raw)
+                continue
+            body = message.get("body") or {}
+            if body.get("rt_cd") == "1":
+                raise ValueError(body.get("msg1") or "한국투자 WebSocket 구독에 실패했습니다.")
+
+
+def fetch_kis_nxt_quote(code: str) -> dict:
+    config = load_kis_config()
+    if not config:
+        raise ValueError("한국투자 API 설정이 없습니다.")
+
+    row = asyncio.run(kis_realtime_tick(config, code))
+    price = parse_price(row.get("STCK_PRPR"))
+    day_low = parse_price(row.get("STCK_LWPR"))
+    day_high = parse_price(row.get("STCK_HGPR"))
+    previous_close = None
+    previous_diff = parse_price(row.get("PRDY_VRSS"))
+    if price is not None and previous_diff is not None:
+        sign = row.get("PRDY_VRSS_SIGN")
+        previous_close = price - previous_diff if sign in {"1", "2"} else price + previous_diff
+
+    if price is None or day_low is None or day_high is None:
+        raise ValueError("한국투자 NXT 실시간 가격 데이터를 찾을 수 없습니다.")
+
+    return {
+        "price": price,
+        "dayLow": day_low,
+        "dayHigh": day_high,
+        "previousClose": previous_close,
+        "timestamp": f"{row.get('BSOP_DATE', '')} {row.get('STCK_CNTG_HOUR', '')}".strip(),
+        "source": "KIS/NXT",
+        "venue": "NXT",
+        "realtime": True,
+    }
 
 
 def search_naver(query: str, market: str) -> list[dict]:
@@ -236,9 +479,12 @@ def fetch_naver_domestic_quote(symbol: str) -> dict:
     venues = {"KRX": krx_quote}
 
     try:
-        venues["NXT"] = fetch_nxt_quote(code)
-    except (HTTPError, URLError, TimeoutError, json.JSONDecodeError, ValueError):
-        pass
+        venues["NXT"] = fetch_kis_nxt_quote(code)
+    except (HTTPError, URLError, TimeoutError, json.JSONDecodeError, ValueError, OSError):
+        try:
+            venues["NXT"] = fetch_nxt_quote(code)
+        except (HTTPError, URLError, TimeoutError, json.JSONDecodeError, ValueError):
+            pass
 
     return {
         "symbol": f"{code}{suffix}",
@@ -503,6 +749,9 @@ class Handler(SimpleHTTPRequestHandler):
         sys.stderr.write("%s - %s\n" % (self.address_string(), format % args))
 
     def do_GET(self) -> None:
+        if not is_authorized(self.headers):
+            return auth_required_response(self)
+
         parsed = urlparse(self.path)
         if parsed.path == "/api/search":
             params = parse_qs(parsed.query)

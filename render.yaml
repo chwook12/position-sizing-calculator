@@ -6,3 +6,14 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: python app.py
     autoDeploy: true
+    envVars:
+      - key: KIS_ENV
+        value: prod
+      - key: KIS_APP_KEY
+        sync: false
+      - key: KIS_APP_SECRET
+        sync: false
+      - key: APP_USERNAME
+        value: user
+      - key: APP_PASSWORD
+        sync: false
