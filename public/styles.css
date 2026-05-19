@@ -103,7 +103,7 @@ select {
 }
 
 .money-input input {
-  padding-left: 2.25rem;
+  padding-left: var(--prefix-space, 2.65rem);
 }
 
 .currency-prefix {

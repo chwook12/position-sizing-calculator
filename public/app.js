@@ -148,12 +148,25 @@ function calculate() {
 
 function updateRptPrefix() {
   rptBaseSymbolEl.textContent = currencySymbols.KRW;
+  syncCurrencyPrefixSpace(rptBaseSymbolEl);
 }
 
 function updatePricePrefixes() {
   const symbol = currencySymbols[activeCurrency()] || activeCurrency();
   entrySymbolEl.textContent = symbol;
   stopSymbolEl.textContent = symbol;
+  syncCurrencyPrefixSpace(entrySymbolEl);
+  syncCurrencyPrefixSpace(stopSymbolEl);
+}
+
+function syncCurrencyPrefixSpace(prefixEl) {
+  const wrapper = prefixEl.closest(".money-input");
+  if (!wrapper) return;
+
+  requestAnimationFrame(() => {
+    const prefixWidth = prefixEl.getBoundingClientRect().width;
+    wrapper.style.setProperty("--prefix-space", `${Math.ceil(prefixWidth) + 30}px`);
+  });
 }
 
 function renderConvertedRpt() {
