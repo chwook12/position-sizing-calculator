@@ -98,6 +98,32 @@ select {
   font-size: 1.05rem;
 }
 
+.money-input {
+  position: relative;
+}
+
+.money-input input {
+  padding-left: 2.25rem;
+}
+
+.currency-prefix {
+  position: absolute;
+  left: 0.95rem;
+  top: 50%;
+  z-index: 1;
+  color: var(--muted);
+  font-weight: 800;
+  transform: translateY(-50%);
+}
+
+.converted-rpt {
+  display: block;
+  min-height: 1.1rem;
+  color: var(--blue);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
 input:focus,
 select:focus,
 button:focus-visible {
@@ -189,6 +215,10 @@ select {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.65rem;
+}
+
+.venue-grid[hidden] {
+  display: none;
 }
 
 .direction-group {

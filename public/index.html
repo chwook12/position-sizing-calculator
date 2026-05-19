@@ -71,18 +71,28 @@
         </div>
 
         <label class="field">
-          <span>RPT (RISK PER TRADE)</span>
-          <input id="rpt" inputmode="decimal" placeholder="₩ RPT" value="1000000" />
+          <span>RPT 원화 기준 (RISK PER TRADE)</span>
+          <div class="money-input">
+            <span id="rptBaseSymbol" class="currency-prefix">₩</span>
+            <input id="rpt" inputmode="decimal" placeholder="1,000,000" value="1000000" />
+          </div>
+          <small id="convertedRpt" class="converted-rpt">적용 RPT: ₩1,000,000</small>
         </label>
 
         <label class="field">
           <span>진입가 (ENTRY)</span>
-          <input id="entry" inputmode="decimal" placeholder="가격 불러오기를 누르면 채워집니다" />
+          <div class="money-input">
+            <span id="entrySymbol" class="currency-prefix">₩</span>
+            <input id="entry" inputmode="decimal" placeholder="가격 불러오기를 누르면 채워집니다" />
+          </div>
         </label>
 
         <label class="field">
           <span>손절가 (STOP)</span>
-          <input id="stop" inputmode="decimal" placeholder="롱은 당일 저가, 숏은 당일 고가" />
+          <div class="money-input">
+            <span id="stopSymbol" class="currency-prefix">₩</span>
+            <input id="stop" inputmode="decimal" placeholder="롱은 당일 저가, 숏은 당일 고가" />
+          </div>
         </label>
       </section>
 

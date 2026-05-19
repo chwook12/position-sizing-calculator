@@ -3,8 +3,13 @@ const queryEl = document.querySelector("#query");
 const suggestionsEl = document.querySelector("#suggestions");
 const selectedStockEl = document.querySelector("#selectedStock");
 const loadPriceEl = document.querySelector("#loadPrice");
+const venueGridEl = document.querySelector(".venue-grid");
 const entryVenueEl = document.querySelector("#entryVenue");
 const stopVenueEl = document.querySelector("#stopVenue");
+const rptBaseSymbolEl = document.querySelector("#rptBaseSymbol");
+const entrySymbolEl = document.querySelector("#entrySymbol");
+const stopSymbolEl = document.querySelector("#stopSymbol");
+const convertedRptEl = document.querySelector("#convertedRpt");
 const rptEl = document.querySelector("#rpt");
 const entryEl = document.querySelector("#entry");
 const stopEl = document.querySelector("#stop");
@@ -22,6 +27,15 @@ const state = {
   direction: "long",
   selected: null,
   lastQuote: null,
+  fx: {
+    from: "KRW",
+    to: "KRW",
+    rate: 1,
+    krwPerUnit: 1,
+    convertedAmount: 1000000,
+    source: "KRW",
+  },
+  fxTimer: null,
   searchTimer: null,
 };
 
@@ -65,10 +79,21 @@ function formatControlledInput(input) {
 
 function formatMoney(value) {
   if (!Number.isFinite(value)) return "-";
-  const currency = state.lastQuote?.currency || state.selected?.currency || selectedMarketCurrency();
+  const currency = activeCurrency();
   const prefix = currencySymbols[currency] || `${currency} `;
   const decimals = ["USD", "HKD", "CNY"].includes(currency) ? 2 : 0;
   return `${prefix}${formatNumber(value, decimals)}`;
+}
+
+function formatCurrencyAmount(value, currency) {
+  if (!Number.isFinite(value)) return "-";
+  const prefix = currencySymbols[currency] || `${currency} `;
+  const decimals = ["USD", "HKD", "CNY"].includes(currency) ? 2 : 0;
+  return `${prefix}${formatNumber(value, decimals)}`;
+}
+
+function activeCurrency() {
+  return state.lastQuote?.currency || state.selected?.currency || selectedMarketCurrency() || "KRW";
 }
 
 function selectedMarketCurrency() {
@@ -97,7 +122,7 @@ function formatInputNumber(value) {
 }
 
 function calculate() {
-  const rpt = parseNumber(rptEl.value);
+  const rpt = state.fx?.convertedAmount || parseNumber(rptEl.value);
   const entry = parseNumber(entryEl.value);
   const stop = parseNumber(stopEl.value);
   const riskPerShare = Math.abs(entry - stop);
@@ -119,6 +144,96 @@ function calculate() {
   outputs.qty.textContent = formatNumber(qty, 0);
   outputs.positionSize.textContent = formatMoney(positionSize);
   outputs.riskAmount.textContent = formatMoney(riskAmount);
+}
+
+function updateRptPrefix() {
+  rptBaseSymbolEl.textContent = currencySymbols.KRW;
+}
+
+function updatePricePrefixes() {
+  const symbol = currencySymbols[activeCurrency()] || activeCurrency();
+  entrySymbolEl.textContent = symbol;
+  stopSymbolEl.textContent = symbol;
+}
+
+function renderConvertedRpt() {
+  const baseAmount = parseNumber(rptEl.value);
+  const currency = activeCurrency();
+  const converted = currency === "KRW" ? baseAmount : state.fx?.convertedAmount;
+
+  if (!baseAmount) {
+    convertedRptEl.textContent = "적용 RPT: -";
+    return;
+  }
+
+  const convertedText = formatCurrencyAmount(converted || 0, currency);
+  if (currency === "KRW") {
+    convertedRptEl.textContent = `적용 RPT: ${convertedText}`;
+    return;
+  }
+
+  const krwPerUnit = state.fx?.krwPerUnit;
+  const rateText = krwPerUnit
+    ? ` · 1 ${currency} ≈ ₩${formatNumber(krwPerUnit, 2)}`
+    : "";
+  convertedRptEl.textContent = `적용 RPT: ${convertedText}${rateText}`;
+}
+
+async function refreshFx() {
+  const baseAmount = parseNumber(rptEl.value);
+  const currency = activeCurrency();
+  updateRptPrefix();
+  updatePricePrefixes();
+
+  if (!baseAmount || currency === "KRW") {
+    state.fx = {
+      from: "KRW",
+      to: "KRW",
+      rate: 1,
+      krwPerUnit: 1,
+      convertedAmount: baseAmount,
+      source: "KRW",
+    };
+    renderConvertedRpt();
+    calculate();
+    return;
+  }
+
+  convertedRptEl.textContent = "적용 RPT: 환율 조회 중...";
+  try {
+    const params = new URLSearchParams({
+      amount: String(baseAmount),
+      to: currency,
+    });
+    const response = await fetch(`/api/fx?${params}`);
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || "환율을 불러오지 못했습니다.");
+    }
+    state.fx = data;
+    renderConvertedRpt();
+  } catch (error) {
+    state.fx = null;
+    convertedRptEl.textContent = error.message;
+  }
+  calculate();
+}
+
+function debounceFx() {
+  const baseAmount = parseNumber(rptEl.value);
+  const currency = activeCurrency();
+  if (state.fx?.to === currency && Number.isFinite(state.fx.rate)) {
+    state.fx = {
+      ...state.fx,
+      amount: baseAmount,
+      convertedAmount: baseAmount * state.fx.rate,
+    };
+    renderConvertedRpt();
+    calculate();
+  }
+
+  clearTimeout(state.fxTimer);
+  state.fxTimer = setTimeout(refreshFx, 250);
 }
 
 function debounceSearch() {
@@ -206,6 +321,7 @@ function quoteForVenue(venue) {
 
 function updateVenueControls() {
   const hasVenueData = Boolean(state.lastQuote?.venues);
+  updateVenueVisibility();
   entryVenueEl.disabled = !hasVenueData;
   stopVenueEl.disabled = !hasVenueData;
 
@@ -218,6 +334,11 @@ function updateVenueControls() {
 
   if (!state.lastQuote?.venues?.[entryVenueEl.value]) entryVenueEl.value = "KRX";
   if (!state.lastQuote?.venues?.[stopVenueEl.value]) stopVenueEl.value = "KRX";
+}
+
+function updateVenueVisibility() {
+  const shouldShow = activeCurrency() === "KRW" && Boolean(state.lastQuote?.venues);
+  venueGridEl.hidden = !shouldShow;
 }
 
 function updateEntryFromSelectedVenue() {
@@ -241,9 +362,11 @@ function updateStopFromSelectedVenue() {
 
 function applyLoadedQuote(data) {
   state.lastQuote = data;
+  updatePricePrefixes();
   updateVenueControls();
   updateEntryFromSelectedVenue();
   updateStopFromSelectedVenue();
+  refreshFx();
 }
 
 async function loadPrice() {
@@ -291,8 +414,18 @@ queryEl.addEventListener("keydown", (event) => {
 marketEl.addEventListener("change", () => {
   state.selected = null;
   state.lastQuote = null;
+  queryEl.value = "";
+  entryEl.value = "";
+  stopEl.value = "";
+  suggestionsEl.hidden = true;
+  suggestionsEl.innerHTML = "";
+  selectedStockEl.textContent = "종목을 검색해 주세요.";
+  selectedStockEl.style.color = "var(--blue)";
+  updatePricePrefixes();
   updateVenueControls();
+  updateVenueVisibility();
   debounceSearch();
+  debounceFx();
   calculate();
 });
 loadPriceEl.addEventListener("click", loadPrice);
@@ -303,6 +436,7 @@ shortBtn.addEventListener("click", () => setDirection("short"));
 [rptEl, entryEl, stopEl].forEach((input) =>
   input.addEventListener("input", () => {
     formatControlledInput(input);
+    if (input === rptEl) debounceFx();
     calculate();
   })
 );
@@ -310,5 +444,8 @@ shortBtn.addEventListener("click", () => setDirection("short"));
 queryEl.value = "삼성전자";
 rptEl.value = addThousandsSeparators(rptEl.value);
 updateVenueControls();
+updateVenueVisibility();
+updatePricePrefixes();
+refreshFx();
 search("삼성전자");
 calculate();
