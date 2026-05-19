@@ -39,6 +39,14 @@ KR_SUFFIX_BY_TYPE = {
 
 _search_cache: dict[tuple[str, str], tuple[float, list[dict]]] = {}
 _quote_cache: dict[str, tuple[float, dict]] = {}
+_fx_cache: dict[str, tuple[float, dict]] = {}
+
+FX_SYMBOLS = {
+    "USD": "KRW=X",
+    "JPY": "JPYKRW=X",
+    "HKD": "HKDKRW=X",
+    "CNY": "CNYKRW=X",
+}
 
 
 def http_json(
@@ -394,6 +402,86 @@ def fetch_chart(symbol: str) -> dict:
     return payload
 
 
+def latest_chart_price(symbol: str) -> tuple[float, int | None]:
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{quote(symbol)}?range=1d&interval=1d"
+    data = http_json(url)
+    result = (data.get("chart", {}).get("result") or [None])[0]
+    if not result:
+        raise ValueError("환율 데이터를 찾을 수 없습니다.")
+
+    meta = result.get("meta", {})
+    price = meta.get("regularMarketPrice")
+    timestamp = meta.get("regularMarketTime")
+    if not price:
+        close_values = (
+            (result.get("indicators", {}).get("quote") or [{}])[0].get("close") or []
+        )
+        price = next((value for value in reversed(close_values) if value is not None), None)
+    if not price:
+        raise ValueError("환율 데이터를 찾을 수 없습니다.")
+    return float(price), timestamp
+
+
+def fallback_krw_rate(currency: str) -> dict:
+    data = http_json("https://open.er-api.com/v6/latest/KRW")
+    rates = data.get("rates", {})
+    rate = rates.get(currency)
+    if not rate:
+        raise ValueError("환율 데이터를 찾을 수 없습니다.")
+
+    krw_per_unit = 1 / float(rate)
+    return {
+        "from": "KRW",
+        "to": currency,
+        "rate": float(rate),
+        "krwPerUnit": krw_per_unit,
+        "source": "open.er-api.com",
+        "timestamp": data.get("time_last_update_utc"),
+    }
+
+
+def fetch_krw_rate(currency: str) -> dict:
+    currency = currency.upper()
+    if currency == "KRW":
+        return {
+            "from": "KRW",
+            "to": "KRW",
+            "rate": 1,
+            "krwPerUnit": 1,
+            "source": "KRW",
+            "timestamp": None,
+        }
+
+    cached = _fx_cache.get(currency)
+    if cached and time.time() - cached[0] < 300:
+        return cached[1]
+
+    try:
+        symbol = FX_SYMBOLS.get(currency)
+        if not symbol:
+            raise ValueError("Yahoo 환율 심볼이 없습니다.")
+        krw_per_unit, timestamp = latest_chart_price(symbol)
+        payload = {
+            "from": "KRW",
+            "to": currency,
+            "rate": 1 / krw_per_unit,
+            "krwPerUnit": krw_per_unit,
+            "source": "Yahoo Finance",
+            "timestamp": timestamp,
+        }
+    except (HTTPError, URLError, TimeoutError, json.JSONDecodeError, ValueError):
+        payload = fallback_krw_rate(currency)
+
+    _fx_cache[currency] = (time.time(), payload)
+    return payload
+
+
+def convert_krw(amount: float, currency: str) -> dict:
+    fx = fetch_krw_rate(currency)
+    converted = amount * fx["rate"]
+    return {**fx, "amount": amount, "convertedAmount": converted}
+
+
 def quote_symbol(symbol: str, market: str) -> dict:
     last_error = "가격 데이터를 찾을 수 없습니다."
     for candidate in normalize_symbol(symbol, market):
@@ -440,6 +528,15 @@ class Handler(SimpleHTTPRequestHandler):
 
             try:
                 return json_response(self, 200, quote_symbol(symbol, market))
+            except ValueError as exc:
+                return error_response(self, 404, str(exc))
+
+        if parsed.path == "/api/fx":
+            params = parse_qs(parsed.query)
+            currency = ((params.get("to") or ["KRW"])[0] or "KRW").upper()
+            amount = parse_price((params.get("amount") or ["0"])[0]) or 0
+            try:
+                return json_response(self, 200, convert_krw(amount, currency))
             except ValueError as exc:
                 return error_response(self, 404, str(exc))
 
