@@ -64,7 +64,8 @@ Render 대시보드의 `Environment` 메뉴에서 아래 값을 추가하세요.
 - `005930`, `TSLA`, `AAPL` 같은 심볼 직접 입력
 - KR, US, JP, HK, CN, VN 마켓 선택
 - KR 종목은 진입가와 손절가 기준을 KRX/NXT로 각각 선택
-- KRX 가격은 Naver/KRX 데이터, NXT 가격은 한국투자 실시간 데이터 또는 Nextrade 공식 지연 데이터 사용
+- KRX 가격은 Naver/KRX 데이터 사용, 실패 시 Yahoo Finance 한국 종목 데이터로 자동 대체
+- NXT 가격은 한국투자 실시간 데이터 또는 Nextrade 공식 지연 데이터 사용
 - 해외 종목은 Yahoo Finance 차트 가격 사용
 - 일봉/주봉 기준 선택 가능
 - 진입가와 손절가의 기준 거래일을 최신/직전으로 각각 선택 가능

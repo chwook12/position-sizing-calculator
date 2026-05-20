@@ -611,6 +611,59 @@ def fetch_naver_domestic_quote(symbol: str, date_mode: str = "TODAY", candle: st
     }
 
 
+def fetch_yahoo_krx_fallback_quote(symbol: str, date_mode: str = "TODAY", candle: str = "D") -> dict:
+    code = naver_domestic_code(symbol)
+    if not code:
+        raise ValueError("국내 종목 코드가 아닙니다.")
+
+    chart = fetch_weekly_chart(symbol, date_mode) if candle == "W" else fetch_daily_chart_bar(symbol, date_mode)
+    candle = "W" if candle == "W" else "D"
+    period_name = "주봉" if candle == "W" else "일봉"
+    mode_name = "직전" if date_mode == "PREV" else "최신"
+    suffix = ".KQ" if symbol.upper().endswith(".KQ") else ".KS"
+
+    krx_quote = {
+        "price": chart["price"],
+        "dayLow": chart["dayLow"],
+        "dayHigh": chart["dayHigh"],
+        "previousClose": chart.get("previousClose"),
+        "timestamp": chart.get("timestamp"),
+        "tradingDate": chart.get("tradingDate"),
+        "source": f"Yahoo Finance KRX fallback {mode_name} {period_name}",
+        "venue": "KRX",
+        "dateMode": date_mode,
+        "candle": candle,
+    }
+    venues = {"KRX": krx_quote}
+
+    if candle == "D" and date_mode != "PREV":
+        try:
+            venues["NXT"] = fetch_kis_nxt_quote(code)
+        except (HTTPError, URLError, TimeoutError, json.JSONDecodeError, ValueError, OSError):
+            try:
+                venues["NXT"] = fetch_nxt_quote(code)
+            except (HTTPError, URLError, TimeoutError, json.JSONDecodeError, ValueError):
+                pass
+
+    return {
+        "symbol": f"{code}{suffix}",
+        "name": chart.get("name") or code,
+        "currency": "KRW",
+        "exchange": chart.get("exchange") or "KRX",
+        "price": krx_quote["price"],
+        "dayLow": krx_quote["dayLow"],
+        "dayHigh": krx_quote["dayHigh"],
+        "previousClose": krx_quote["previousClose"],
+        "timestamp": krx_quote["timestamp"],
+        "tradingDate": krx_quote["tradingDate"],
+        "source": krx_quote["source"],
+        "venues": venues,
+        "defaultVenue": "KRX",
+        "dateMode": date_mode,
+        "candle": candle,
+    }
+
+
 def fetch_nxt_quote(code: str) -> dict:
     data = http_json(
         "https://www.nextrade.co.kr/brdinfoTime/brdinfoTimeList.do",
@@ -828,6 +881,65 @@ def fetch_weekly_chart(symbol: str, date_mode: str = "TODAY") -> dict:
     return payload
 
 
+def fetch_daily_chart_bar(symbol: str, date_mode: str = "TODAY") -> dict:
+    cache_key = f"{symbol}:D-BAR:{date_mode}"
+    cached = _quote_cache.get(cache_key)
+    if cached and time.time() - cached[0] < 30:
+        return cached[1]
+
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{quote(symbol)}?range=10d&interval=1d"
+    data = http_json(url)
+    result = (data.get("chart", {}).get("result") or [None])[0]
+    if not result:
+        error = data.get("chart", {}).get("error") or {}
+        raise ValueError(error.get("description") or "일봉 가격 데이터를 찾을 수 없습니다.")
+
+    meta = result.get("meta", {})
+    timezone_name = meta.get("exchangeTimezoneName")
+    quote_data = (result.get("indicators", {}).get("quote") or [{}])[0]
+    timestamps = result.get("timestamp") or []
+    close_values = quote_data.get("close") or []
+    high_values = quote_data.get("high") or []
+    low_values = quote_data.get("low") or []
+
+    valid_indices = [
+        index
+        for index, value in enumerate(close_values)
+        if value is not None
+        and index < len(high_values)
+        and index < len(low_values)
+        and high_values[index] is not None
+        and low_values[index] is not None
+    ]
+    selected_index = valid_indices[-2 if date_mode == "PREV" and len(valid_indices) >= 2 else -1] if valid_indices else -1
+    if selected_index < 0:
+        raise ValueError("일봉 가격 데이터를 찾을 수 없습니다.")
+
+    timestamp = timestamps[selected_index] if selected_index < len(timestamps) else None
+    mode_name = "직전" if date_mode == "PREV" else "최신"
+    payload = {
+        "symbol": meta.get("symbol") or symbol,
+        "name": meta.get("longName") or meta.get("shortName") or symbol,
+        "currency": meta.get("currency") or "",
+        "exchange": meta.get("fullExchangeName") or meta.get("exchangeName") or "",
+        "price": close_values[selected_index],
+        "dayLow": low_values[selected_index],
+        "dayHigh": high_values[selected_index],
+        "previousClose": close_values[valid_indices[-3]] if date_mode == "PREV" and len(valid_indices) >= 3 else meta.get("chartPreviousClose"),
+        "timestamp": timestamp,
+        "tradingDate": trading_date_from_timestamp(timestamp, timezone_name),
+        "timezone": timezone_name,
+        "source": f"Yahoo Finance {mode_name} 일봉",
+        "dateMode": date_mode,
+        "candle": "D",
+    }
+    if not payload["price"]:
+        raise ValueError("일봉 가격 데이터를 찾을 수 없습니다.")
+
+    _quote_cache[cache_key] = (time.time(), payload)
+    return payload
+
+
 def fetch_chart(symbol: str, date_mode: str = "TODAY", candle: str = "D") -> dict:
     candle = "W" if candle == "W" else "D"
     if candle == "W":
@@ -993,6 +1105,11 @@ def quote_symbol(symbol: str, market: str, date_mode: str = "TODAY", candle: str
                 return fetch_naver_domestic_quote(candidate, date_mode, candle)
             except (HTTPError, URLError, TimeoutError, json.JSONDecodeError, ValueError) as exc:
                 last_error = str(exc)
+                try:
+                    return fetch_yahoo_krx_fallback_quote(candidate, date_mode, candle)
+                except (HTTPError, URLError, TimeoutError, json.JSONDecodeError, ValueError) as fallback_exc:
+                    last_error = str(fallback_exc)
+                    continue
 
         try:
             return fetch_chart(candidate, date_mode, candle)
